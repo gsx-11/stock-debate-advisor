@@ -2,27 +2,54 @@ import { atom } from 'jotai';
 import { apiClient } from './client';
 
 // ============================================================================
-// Types
+// Types — aligned with AI-service v3.0 DebateResponse
 // ============================================================================
 
 export interface DebateRequest {
   symbol: string;
   context?: string;
+  mode?: 'auto' | 'human';
+}
+
+export interface DebateRound {
+  round_num: number;
+  fundamental: string;
+  technical: string;
+  sentiment: string;
+  risk_manager: string;
+  judge_decision: string;
+  human_input?: string | null;
 }
 
 export interface DebateResponse {
+  session_id: string;
+  ticker: string;
   symbol: string;
-  debate_id: string;
+  timeframe: string;
+  actual_rounds: number;
+  rounds: DebateRound[];
+  mode: string;
+  status: string;
+  final_recommendation: string;
+  confidence: string;
+  rationale: string;
+  risks: string;
+  monitor: string;
+  price_target: string;
+  // Numeric confidence and qualification flag from backend guardrail
+  confidence_percent?: number;
+  decision_qualified?: boolean;
+  // Derived fields for UI convenience
   agents: AgentResponse[];
   moderator_summary: string;
   judge_decision: JudgeDecision;
-  confidence: number;
+  confidence_score: number;
   timestamp: string;
 }
 
 export interface AgentResponse {
   agent_name: string;
-  agent_type: 'fundamental' | 'technical' | 'sentiment';
+  agent_type: 'fundamental' | 'technical' | 'sentiment' | 'risk_manager';
   analysis: string;
   confidence: number;
   key_points: string[];
@@ -35,65 +62,46 @@ export interface JudgeDecision {
   key_factors: string[];
 }
 
-export interface FinancialData {
+export interface CompanyData {
   symbol: string;
-  company_name: string;
-  sector: string;
-  industry: string;
-  market_cap: number;
-  pe_ratio: number;
-  dividend_yield: number;
-  revenue: number;
-  net_income: number;
-  cash_flow: number;
-  balance_sheet: {
-    total_assets: number;
-    total_liabilities: number;
-    shareholders_equity: number;
-  };
-  metrics: Record<string, number>;
+  company: Record<string, unknown>;
+  financial: Record<string, unknown>;
+  prices: Record<string, unknown>;
 }
 
 export interface CompanyInfo {
   symbol: string;
-  name: string;
-  description: string;
-  sector: string;
-  industry: string;
-  website: string;
-  employees: number;
-  founded: string;
-  headquarters: string;
-  ceo: string;
+  name?: string;
+  description?: string;
+  sector?: string;
+  industry?: string;
+  website?: string;
+  employees?: number;
+  founded?: string;
+  headquarters?: string;
+  ceo?: string;
+  [key: string]: unknown;
 }
 
 export interface NewsItem {
-  id: string;
-  title: string;
-  content: string;
-  source: string;
-  published_at: string;
-  sentiment: 'positive' | 'negative' | 'neutral';
-  relevance_score: number;
-  url?: string;
+  id?: string;
+  title?: string;
+  content?: string;
+  source?: string;
+  published_at?: string;
+  sentiment?: 'positive' | 'neutral' | 'negative';
+  relevance_score?: number;
+  [key: string]: unknown;
 }
 
 export interface MarketAnalysis {
-  timestamp: string;
-  market_indices: {
-    name: string;
-    value: number;
-    change: number;
-    change_percent: number;
-  }[];
-  sector_performance: {
-    sector: string;
-    change_percent: number;
-    performers: string[];
-  }[];
-  volatility_index: number;
-  market_sentiment: 'bullish' | 'neutral' | 'bearish';
-  macroeconomic_indicators: Record<string, number>;
+  timestamp?: string;
+  market_indices?: unknown[];
+  sector_performance?: unknown[];
+  volatility_index?: number;
+  market_sentiment?: string;
+  macroeconomic_indicators?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 export interface LoadingState {
@@ -110,12 +118,12 @@ export const debateLoadingAtom = atom<LoadingState>({
   error: null,
 });
 
-export const financialLoadingAtom = atom<LoadingState>({
+export const companyLoadingAtom = atom<LoadingState>({
   isLoading: false,
   error: null,
 });
 
-export const companyLoadingAtom = atom<LoadingState>({
+export const financialLoadingAtom = atom<LoadingState>({
   isLoading: false,
   error: null,
 });
@@ -135,223 +143,203 @@ export const marketLoadingAtom = atom<LoadingState>({
 // ============================================================================
 
 export const debateResultAtom = atom<DebateResponse | null>(null);
-export const financialDataAtom = atom<FinancialData | null>(null);
+export const companyDataAtom = atom<CompanyData | null>(null);
+export const financialDataAtom = atom<Record<string, unknown> | null>(null);
 export const companyInfoAtom = atom<CompanyInfo | null>(null);
-export const newsAtom = atom<NewsItem[]>([]);
+export const newsAtom = atom<NewsItem[] | null>(null);
 export const marketAnalysisAtom = atom<MarketAnalysis | null>(null);
 
 // ============================================================================
-// API Functions (using atoms as async state)
+// Helpers
+// ============================================================================
+
+function parseConfidence(raw: string | number): number {
+  if (typeof raw === 'number') return raw;
+  const match = String(raw).match(/[\d.]+/);
+  return match ? parseFloat(match[0]) / 100 : 0.5;
+}
+
+function mapRecommendation(raw: string): 'buy' | 'hold' | 'sell' {
+  const upper = String(raw).toUpperCase();
+  if (upper.includes('BUY')) return 'buy';
+  if (upper.includes('SELL')) return 'sell';
+  return 'hold';
+}
+
+function extractAgents(rounds: DebateRound[]): AgentResponse[] {
+  if (!rounds || rounds.length === 0) return [];
+  const lastRound = rounds[rounds.length - 1];
+  const agentTypes = ['fundamental', 'technical', 'sentiment', 'risk_manager'] as const;
+  return agentTypes
+    .filter((t) => lastRound[t])
+    .map((t) => ({
+      agent_name: t.charAt(0).toUpperCase() + t.slice(1).replace('_', ' '),
+      agent_type: t,
+      analysis: lastRound[t],
+      confidence: 0.8,
+      key_points: [],
+    }));
+}
+
+// ============================================================================
+// API Functions
 // ============================================================================
 
 /**
  * Run multi-agent debate on a stock
- * Maps to crewai-orchestration endpoints:
- * 1. POST /v1/debate/start - Start debate session
- * 2. GET /v1/debate/status/{session_id} - Poll for completion
- * 3. GET /v1/debate/result/{session_id} - Get results
+ * 1. POST /debate/start  → returns DebateResponse with session_id
+ * 2. GET  /debate/status/{id} → poll (optional, result already in step 1 for sync engine)
+ * 3. GET  /debate/result/{id} → get full result
  */
 export const fetchDebateAsync = async (
   params: DebateRequest
 ): Promise<DebateResponse> => {
   try {
-    // Step 1: Start debate session
-    const startResponse = await apiClient.post<any>(
-      '/v1/debate/start',
+    const raw = await apiClient.post<Record<string, unknown>>(
+      '/debate/start',
       {
         ticker: params.symbol,
         timeframe: '3 months',
         min_rounds: 1,
-        max_rounds: 1
+        max_rounds: 3,
+        mode: params.mode || 'auto',
       }
     );
-    
-    const sessionId = startResponse.session_id;
-    
-    // Step 2: Poll for completion (with timeout)
-    let debateResult: any = null;
-    let isComplete = false;
-    let pollCount = 0;
-    const maxPolls = 60; // 60 seconds with 1s intervals
-    
-    while (!isComplete && pollCount < maxPolls) {
-      const statusResponse = await apiClient.get<any>(
-        `/v1/debate/status/${sessionId}`
-      );
-      
-      const status = statusResponse.status || 'in_progress';
-      const progress = statusResponse.progress || 0;
-      
-      if (status === 'completed' || progress >= 100) {
-        isComplete = true;
-        // Step 3: Get final results
-        debateResult = await apiClient.get<any>(
-          `/v1/debate/result/${sessionId}`
-        );
-        break;
-      }
-      
-      pollCount++;
-      // Wait 1 second before next poll
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
-    if (!isComplete) {
-      throw new Error('Debate session timed out. Please check status manually.');
-    }
-    
-    // Parse debate result
-    const result = debateResult.data || debateResult;
-    const agents: AgentResponse[] = [];
-    
-    // Add placeholder agent response
-    if (result.debate_summary) {
-      agents.push({
-        agent_name: 'Debate Panel',
-        agent_type: 'fundamental',
-        analysis: result.debate_summary,
-        confidence: 0.8,
-        key_points: []
-      });
-    }
-    
-    // Parse verdict
-    const verdict = result.verdict || {};
-    const recommendation = (verdict.recommendation || 'HOLD').toUpperCase();
-    
+
+    const rounds = (raw.rounds || []) as DebateRound[];
+    const confidenceNum = parseConfidence(raw.confidence as string);
+    const rec = mapRecommendation(raw.final_recommendation as string);
+
     return {
+      session_id: (raw.session_id || '') as string,
+      ticker: (raw.ticker || params.symbol) as string,
       symbol: params.symbol,
-      debate_id: sessionId,
-      agents,
-      moderator_summary: result.debate_summary || 'Debate completed successfully',
+      timeframe: (raw.timeframe || '3 months') as string,
+      actual_rounds: (raw.actual_rounds || 0) as number,
+      rounds,
+      mode: (raw.mode || 'auto') as string,
+      status: (raw.status || 'completed') as string,
+      final_recommendation: (raw.final_recommendation || 'HOLD') as string,
+      confidence: (raw.confidence || '50%') as string,
+      rationale: (raw.rationale || '') as string,
+      risks: (raw.risks || '') as string,
+      monitor: (raw.monitor || '') as string,
+      price_target: (raw.price_target || '') as string,
+      agents: extractAgents(rounds),
+      moderator_summary: (raw.rationale || 'Debate completed') as string,
       judge_decision: {
-        recommendation: (recommendation === 'BUY' ? 'buy' : recommendation === 'SELL' ? 'sell' : 'hold') as 'buy' | 'hold' | 'sell',
-        rationale: verdict.rationale || 'Analysis complete',
-        confidence_score: (verdict.score || 5) / 10,
-        key_factors: []
+        recommendation: rec,
+        rationale: (raw.rationale || '') as string,
+        confidence_score: confidenceNum,
+        key_factors: [],
       },
-      confidence: (verdict.score || 5) / 10,
-      timestamp: result.completed_at || new Date().toISOString()
+      confidence_score: confidenceNum,
+      timestamp: new Date().toISOString(),
     };
-    
   } catch (error) {
     throw new Error('Failed to run debate. Please try again.');
   }
 };
 
 /**
- * Fetch financial data for a symbol
+ * Fetch available stock symbols
+ */
+export const fetchCompaniesAsync = async (): Promise<string[]> => {
+  try {
+    const data = await apiClient.get<{ symbols: string[]; count: number }>('/companies');
+    return data.symbols;
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * Fetch company data (info + financial + prices)
+ */
+export const fetchCompanyDataAsync = async (
+  symbol: string
+): Promise<CompanyData> => {
+  try {
+    return await apiClient.get<CompanyData>(`/company/${symbol}`);
+  } catch {
+    return { symbol, company: {}, financial: {}, prices: {} };
+  }
+};
+
+/**
+ * Fetch financial data for a stock symbol
  */
 export const fetchFinancialDataAsync = async (
   symbol: string
-): Promise<FinancialData> => {
+): Promise<Record<string, unknown>> => {
   try {
-    // Backend doesn't have dedicated financial endpoint yet
-    // Return mock data - will be populated from debate analysis
-    return {
-      symbol,
-      company_name: symbol,
-      sector: 'Technology',
-      industry: 'Software',
-      market_cap: 0,
-      pe_ratio: 0,
-      dividend_yield: 0,
-      revenue: 0,
-      net_income: 0,
-      cash_flow: 0,
-      balance_sheet: {
-        total_assets: 0,
-        total_liabilities: 0,
-        shareholders_equity: 0
-      },
-      metrics: {}
-    };
-  } catch (error) {
-    throw new Error(`Failed to fetch financial data for ${symbol}`);
+    return await apiClient.get<Record<string, unknown>>(`/financials/${symbol}`);
+  } catch {
+    return { symbol };
   }
 };
 
 /**
- * Fetch company information
+ * Fetch company info for a stock symbol
  */
-export const fetchCompanyInfoAsync = async (
-  symbol: string
-): Promise<CompanyInfo> => {
+export const fetchCompanyInfoAsync = async (symbol: string): Promise<CompanyInfo> => {
   try {
-    // Backend doesn't have dedicated company endpoint yet
-    // Return mock data structure
-    return {
-      symbol,
-      name: symbol,
-      description: 'Company information',
-      sector: 'Technology',
-      industry: 'Software',
-      website: `https://www.${symbol.toLowerCase()}.com`,
-      employees: 0,
-      founded: '2000',
-      headquarters: 'USA',
-      ceo: 'Unknown'
-    };
-  } catch (error) {
-    throw new Error(`Failed to fetch company info for ${symbol}`);
+    return await apiClient.get<CompanyInfo>(`/company/${symbol}`);
+  } catch {
+    return { symbol };
   }
 };
 
 /**
- * Fetch news for a symbol
+ * Fetch related news for a stock symbol
  */
 export const fetchNewsAsync = async (
   symbol: string,
-  limit: number = 10
+  limit = 10
 ): Promise<NewsItem[]> => {
   try {
-    // Backend doesn't have dedicated news endpoint yet
-    // Return empty array - will integrate when backend has news service
+    return await apiClient.get<NewsItem[]>(`/financials/${symbol}/news`, {
+      params: { limit },
+    });
+  } catch {
     return [];
-  } catch (error) {
-    throw new Error(`Failed to fetch news for ${symbol}`);
   }
 };
 
 /**
- * Fetch market analysis
+ * Fetch global market analysis overview
  */
 export const fetchMarketAnalysisAsync = async (): Promise<MarketAnalysis> => {
   try {
-    // Backend doesn't have dedicated market analysis endpoint yet
-    // Return empty structure
+    return await apiClient.get<MarketAnalysis>('/market-analysis');
+  } catch {
     return {
       timestamp: new Date().toISOString(),
+      confidence_percent: (raw.confidence_percent ?? 0) as number,
+      decision_qualified: (raw.decision_qualified ?? false) as boolean,
       market_indices: [],
       sector_performance: [],
-      volatility_index: 0,
       market_sentiment: 'neutral',
-      macroeconomic_indicators: {}
+      macroeconomic_indicators: {},
     };
-  } catch (error) {
-    throw new Error('Failed to fetch market analysis');
   }
 };
 
 /**
- * Fetch multiple endpoints in parallel
+ * Fetch core analysis datasets concurrently
  */
 export const fetchComprehensiveAnalysisAsync = async (
   symbol: string
 ): Promise<{
-  financial: FinancialData;
+  financial: Record<string, unknown>;
   company: CompanyInfo;
   news: NewsItem[];
 }> => {
-  try {
-    const [financial, company, news] = await Promise.all([
-      fetchFinancialDataAsync(symbol),
-      fetchCompanyInfoAsync(symbol),
-      fetchNewsAsync(symbol),
-    ]);
+  const [financial, company, news] = await Promise.all([
+    fetchFinancialDataAsync(symbol),
+    fetchCompanyInfoAsync(symbol),
+    fetchNewsAsync(symbol),
+  ]);
 
-    return { financial, company, news };
-  } catch (error) {
-    throw new Error('Failed to fetch comprehensive analysis');
-  }
+  return { financial, company, news };
 };

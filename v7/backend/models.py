@@ -50,12 +50,15 @@ class DebateRecord:
     status: DebateStatus
     rounds: int
     created_at: str
+    mode: str = "auto"
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     verdict: Optional[Dict[str, Any]] = None
     debate_summary: Optional[str] = None
     error_message: Optional[str] = None
     duration_seconds: Optional[float] = None
+    price_target: Optional[str] = None
+    risk_assessment: Optional[str] = None
 
     def to_item(self) -> Dict[str, Any]:
         """Convert to DynamoDB item format"""

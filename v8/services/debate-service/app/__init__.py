@@ -1,1 +1,0 @@
-"""Debate Service - Main package."""

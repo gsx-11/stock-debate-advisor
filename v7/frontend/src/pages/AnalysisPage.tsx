@@ -1,25 +1,34 @@
 import React, { FormEvent, useState } from 'react';
 import { useAtom } from 'jotai';
 import { selectedSymbolAtom } from '../state/selectionAtom';
-import { useDebate } from '../hooks/useApi';
+import { useDebateStream } from '../hooks/useDebateStream';
+import { DebateTurnCard } from '../components/streaming/DebateTurnCard';
 
 export const AnalysisPage: React.FC = () => {
   const [selectedSymbol, setSelectedSymbol] = useAtom(selectedSymbolAtom);
   const [symbolInput, setSymbolInput] = useState(selectedSymbol ?? '');
-  const { result, loading, runDebate } = useDebate();
-  const error = loading.error;
+  const { state: stream, startStream, reset } = useDebateStream();
 
-  const onSubmit = async (e: FormEvent) => {
+  const isRunning = stream.status === 'connecting' || stream.status === 'streaming';
+  const error = stream.status === 'error' ? (stream.error ?? 'Stream error') : null;
+
+  const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (!symbolInput.trim()) return;
     const symbol = symbolInput.trim().toUpperCase();
     setSelectedSymbol(symbol);
-    try {
-      await runDebate({ symbol });
-    } catch (err) {
-      // Error handled by debate hook
-    }
+    reset();
+    startStream({ ticker: symbol, timeframe: '3 months', min_rounds: 1, max_rounds: 5 });
   };
+
+  function verdictColor(rec: string | null): string {
+    if (!rec) return 'text-muted-foreground';
+    const u = rec.toUpperCase();
+    if (u.includes('BUY')) return 'text-success';
+    if (u.includes('SELL')) return 'text-destructive';
+    if (u.includes('NO_DECISION')) return 'text-muted-foreground italic';
+    return 'text-warning';
+  }
 
   return (
     <section className="space-y-6 animate-fade-in">
@@ -54,13 +63,13 @@ export const AnalysisPage: React.FC = () => {
             <button
               type="submit"
               className="w-full inline-flex items-center justify-center gap-2 rounded-md bg-gradient-primary px-3 py-2 text-xs font-semibold text-white shadow-md hover:shadow-lg hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={loading.isLoading}
+              disabled={isRunning}
             >
               <span className="fa-solid fa-scale-balanced" aria-hidden="true" />
-              <span>{loading.isLoading ? 'Running Debate…' : 'Start Debate'}</span>
+              <span>{isRunning ? 'Running Debate…' : 'Start Debate'}</span>
             </button>
             
-            {selectedSymbol && (
+              {selectedSymbol && !isRunning && (
               <div className="pt-2 border-t border-border/30">
                 <p className="text-xs text-muted-foreground">
                   <span className="font-medium text-foreground">{selectedSymbol}</span> selected
@@ -91,7 +100,7 @@ export const AnalysisPage: React.FC = () => {
                 </div>
               )}
 
-              {selectedSymbol && !result && !error && !loading.isLoading && (
+              {selectedSymbol && stream.status === 'idle' && (
                 <div className="rounded-md bg-success-light p-3 border border-success/20">
                   <p className="text-xs text-foreground/80 font-medium">
                     Ready to debate <span className="font-semibold text-success">{selectedSymbol}</span>
@@ -99,7 +108,7 @@ export const AnalysisPage: React.FC = () => {
                 </div>
               )}
 
-              {loading.isLoading && (
+              {isRunning && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
                     <div className="flex gap-1">
@@ -108,10 +117,10 @@ export const AnalysisPage: React.FC = () => {
                       <div className="w-2 h-2 bg-success rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
                     </div>
                     <p className="text-xs font-medium text-foreground">
-                      Running multi-agent analysis…
+                      Round {stream.currentRound}{stream.maxRounds > 0 ? `/${stream.maxRounds}` : ''} — agents deliberating…
                     </p>
                   </div>
-                  <p className="text-xs text-muted-foreground">Analyzing fundamentals, technicals, and sentiment for {selectedSymbol}</p>
+                  <p className="text-xs text-muted-foreground">Streaming live analysis for {selectedSymbol}</p>
                 </div>
               )}
 
@@ -124,59 +133,83 @@ export const AnalysisPage: React.FC = () => {
                 </div>
               )}
 
-              {result && result.agents && result.agents.length > 0 && (
-                <div className="space-y-3">
-                  {/* Judge Decision */}
-                  <div className="rounded-md bg-primary-light p-3 border border-primary/30">
-                    <div className="flex items-start justify-between mb-2">
-                      <div>
-                        <p className="text-xs font-semibold text-primary uppercase tracking-wide">Judge Decision</p>
-                        <p className="text-sm font-bold text-foreground capitalize mt-1">
-                          {result.judge_decision.recommendation}
-                        </p>
-                      </div>
-                      <span className={`text-lg font-bold ${
-                        result.judge_decision.recommendation === 'buy' ? 'text-success' :
-                        result.judge_decision.recommendation === 'sell' ? 'text-destructive' :
-                        'text-warning'
-                      }`}>
-                        {result.judge_decision.recommendation === 'buy' && '📈'}
-                        {result.judge_decision.recommendation === 'sell' && '📉'}
-                        {result.judge_decision.recommendation === 'hold' && '➡️'}
-                      </span>
-                    </div>
-                    <p className="text-xs text-foreground/80">{result.judge_decision.rationale}</p>
-                    <p className="text-xs text-muted-foreground mt-2">Confidence: {(result.judge_decision.confidence_score * 100).toFixed(0)}%</p>
-                  </div>
-
-                  {/* Moderator Summary */}
-                  <div className="rounded-md bg-accent-light p-3 border border-accent/30">
-                    <p className="text-xs font-semibold text-accent uppercase tracking-wide mb-1">Moderator Summary</p>
-                    <p className="text-xs text-foreground/80">{result.moderator_summary}</p>
-                  </div>
-
-                  {/* Agent Analysis Cards */}
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold text-foreground uppercase tracking-wide">Agent Analyses</p>
-                    {result.agents.map((agent, idx) => (
-                      <div key={idx} className="rounded-md bg-muted/50 p-3 border border-border/30">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="text-xs font-bold text-primary uppercase">{agent.agent_name}</span>
-                          <span className="inline-block px-2 py-0.5 rounded-full bg-primary/10 text-xs font-medium text-primary">
-                            {(agent.confidence * 100).toFixed(0)}% confidence
-                          </span>
-                        </div>
-                        <p className="text-xs text-foreground/80 leading-relaxed">{agent.analysis}</p>
-                        {agent.key_points && agent.key_points.length > 0 && (
-                          <ul className="text-xs text-muted-foreground mt-2 space-y-1 ml-3">
-                            {agent.key_points.slice(0, 3).map((point, i) => (
-                              <li key={i} className="list-disc">{point}</li>
-                            ))}
-                          </ul>
+              {/* Live streaming turns */}
+              {stream.turns.length > 0 && (
+                <div className="space-y-2">
+                  {/* Round progress */}
+                  {stream.maxRounds > 0 && (
+                    <div>
+                      <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+                        <span>Round {stream.currentRound} of {stream.maxRounds}</span>
+                        {stream.confidencePercent !== null && (
+                          <span>Confidence: {stream.confidencePercent.toFixed(0)}%</span>
                         )}
                       </div>
-                    ))}
-                  </div>
+                      <div className="h-1 rounded-full bg-border/40 overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-primary rounded-full transition-all duration-300"
+                          style={{ width: `${Math.min(100, (stream.currentRound / stream.maxRounds) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Turn cards */}
+                  {stream.turns.map((turn) => (
+                    <DebateTurnCard key={turn.id} turn={turn} />
+                  ))}
+
+                  {/* Final verdict */}
+                  {stream.status === 'completed' && stream.finalRecommendation && (
+                    <div className={`rounded-lg border-2 p-4 mt-3 ${
+                      stream.decisionQualified
+                        ? stream.finalRecommendation.toUpperCase().includes('BUY')
+                          ? 'border-success/50 bg-success/5'
+                          : stream.finalRecommendation.toUpperCase().includes('SELL')
+                          ? 'border-destructive/50 bg-destructive/5'
+                          : 'border-warning/50 bg-warning/5'
+                        : 'border-border/50 bg-muted/30'
+                    }`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Final Verdict</p>
+                        <span className="text-[10px] font-medium rounded-full px-2 py-0.5 bg-muted/60 text-muted-foreground">
+                          {stream.actualRounds} round{stream.actualRounds !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      <p className={`text-xl font-black mb-1 ${verdictColor(stream.finalRecommendation)}`}>
+                        {stream.finalRecommendation}
+                      </p>
+                      {stream.confidencePercent !== null && (
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-xs text-muted-foreground">
+                            Confidence: <span className="font-semibold text-foreground">{stream.confidencePercent.toFixed(0)}%</span>
+                          </span>
+                          {stream.decisionQualified ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] bg-success/15 text-success rounded-full px-2 py-0.5 font-semibold">
+                              <span className="fa-solid fa-circle-check" aria-hidden="true" /> Qualified
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] bg-muted/60 text-muted-foreground rounded-full px-2 py-0.5">
+                              Below 80% threshold
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {stream.rationale && (
+                        <p className="text-xs text-foreground/80 leading-relaxed mt-1">{stream.rationale}</p>
+                      )}
+                      {stream.risks && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                          <span className="font-semibold">Risks:</span> {stream.risks}
+                        </p>
+                      )}
+                      {stream.monitor && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          <span className="font-semibold">Monitor:</span> {stream.monitor}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

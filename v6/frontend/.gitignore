@@ -1,4 +1,0 @@
-# .gitignore for frontend
-node_modules/
-dist/
-.env

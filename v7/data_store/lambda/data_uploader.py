@@ -141,18 +141,24 @@ def upload_all_data(
 
 def upload_company(table, company_data: Dict[str, Any], ticker: str) -> None:
     """Upload company metadata to companies table"""
+    if not ticker or not isinstance(ticker, str):
+        raise ValueError(f"Invalid ticker: {ticker}")
+
+    info = company_data.get('info', {})
+    description = info.get('description', '') or ''
+
     item = {
         'ticker': ticker,
         'symbol': company_data.get('symbol', ticker),
         'timestamp': company_data.get('timestamp', datetime.utcnow().isoformat()),
-        'name': company_data.get('info', {}).get('name', ''),
-        'sector': company_data.get('info', {}).get('sector', ''),
-        'industry': company_data.get('info', {}).get('industry', ''),
-        'market_cap': company_data.get('info', {}).get('market_cap', 0),
-        'website': company_data.get('info', {}).get('website', ''),
-        'description': company_data.get('info', {}).get('description', '')[:500],  # Limit description
-        'exchange': company_data.get('info', {}).get('exchange', ''),
-        'currency': company_data.get('info', {}).get('currency', 'VND'),
+        'name': info.get('name', ''),
+        'sector': info.get('sector', ''),
+        'industry': info.get('industry', ''),
+        'market_cap': info.get('market_cap', 0),
+        'website': info.get('website', ''),
+        'description': description[:500],
+        'exchange': info.get('exchange', ''),
+        'currency': info.get('currency', 'VND'),
         'updated_at': datetime.utcnow().isoformat()
     }
     
@@ -161,6 +167,9 @@ def upload_company(table, company_data: Dict[str, Any], ticker: str) -> None:
 
 def upload_financial_reports(table, financial_data: Dict[str, Any], ticker: str) -> int:
     """Upload financial reports to financial_reports table"""
+    if not ticker or not isinstance(ticker, str):
+        raise ValueError(f"Invalid ticker: {ticker}")
+
     count = 0
     
     # Handle both list and dict formats
@@ -173,20 +182,27 @@ def upload_financial_reports(table, financial_data: Dict[str, Any], ticker: str)
     for report in reports:
         try:
             timestamp = report.get('timestamp', datetime.utcnow().isoformat())
+            metrics = report.get('metrics', {})
+
+            def safe_float(val: Any, default: float = 0.0) -> float:
+                try:
+                    return float(val) if val is not None else default
+                except (TypeError, ValueError):
+                    return default
             
             item = {
                 'ticker': ticker,
                 'timestamp': timestamp,
-                'pe_ratio': float(report.get('metrics', {}).get('pe_ratio', 0)),
-                'pb_ratio': float(report.get('metrics', {}).get('pb_ratio', 0)),
-                'dividend_yield': float(report.get('metrics', {}).get('dividend_yield', 0)),
-                'eps': float(report.get('metrics', {}).get('eps', 0)),
-                'roe': float(report.get('metrics', {}).get('roe', 0)),
-                'roa': float(report.get('metrics', {}).get('roa', 0)),
-                'debt_to_equity': float(report.get('metrics', {}).get('debt_to_equity', 0)),
-                'current_ratio': float(report.get('metrics', {}).get('current_ratio', 0)),
-                'revenue': float(report.get('metrics', {}).get('revenue', 0)),
-                'net_income': float(report.get('metrics', {}).get('net_income', 0)),
+                'pe_ratio': safe_float(metrics.get('pe_ratio')),
+                'pb_ratio': safe_float(metrics.get('pb_ratio')),
+                'dividend_yield': safe_float(metrics.get('dividend_yield')),
+                'eps': safe_float(metrics.get('eps')),
+                'roe': safe_float(metrics.get('roe')),
+                'roa': safe_float(metrics.get('roa')),
+                'debt_to_equity': safe_float(metrics.get('debt_to_equity')),
+                'current_ratio': safe_float(metrics.get('current_ratio')),
+                'revenue': safe_float(metrics.get('revenue')),
+                'net_income': safe_float(metrics.get('net_income')),
                 'updated_at': datetime.utcnow().isoformat()
             }
             
@@ -200,6 +216,9 @@ def upload_financial_reports(table, financial_data: Dict[str, Any], ticker: str)
 
 def upload_ohlc_prices(table, ohlc_data: Dict[str, Any], ticker: str) -> int:
     """Upload OHLC prices to ohlc_prices table"""
+    if not ticker or not isinstance(ticker, str):
+        raise ValueError(f"Invalid ticker: {ticker}")
+
     count = 0
     
     # Handle both list and dict formats
@@ -212,16 +231,27 @@ def upload_ohlc_prices(table, ohlc_data: Dict[str, Any], ticker: str) -> int:
     for price_record in prices:
         try:
             date = price_record.get('date', price_record.get('timestamp', datetime.utcnow().isoformat()))
-            
+            if not date:
+                logger.warning(f"Skipping OHLC record for {ticker}: missing date")
+                continue
+
+            def safe_float(val: Any, default: float = 0.0) -> float:
+                try:
+                    return float(val) if val is not None else default
+                except (TypeError, ValueError):
+                    return default
+
+            close_price = safe_float(price_record.get('close'))
+
             item = {
                 'ticker': ticker,
                 'date': date,
-                'open': float(price_record.get('open', 0)),
-                'high': float(price_record.get('high', 0)),
-                'low': float(price_record.get('low', 0)),
-                'close': float(price_record.get('close', 0)),
-                'volume': int(price_record.get('volume', 0)),
-                'adjusted_close': float(price_record.get('adjusted_close', price_record.get('close', 0))),
+                'open': safe_float(price_record.get('open')),
+                'high': safe_float(price_record.get('high')),
+                'low': safe_float(price_record.get('low')),
+                'close': close_price,
+                'volume': int(safe_float(price_record.get('volume'))),
+                'adjusted_close': safe_float(price_record.get('adjusted_close', close_price)),
                 'updated_at': datetime.utcnow().isoformat()
             }
             

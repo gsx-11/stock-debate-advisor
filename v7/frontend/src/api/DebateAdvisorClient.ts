@@ -3,8 +3,8 @@
  * TypeScript/JavaScript client for frontend integration
  */
 
-// API Configuration - Use environment variable or default to port 8001
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001/api';
+// API Configuration - Use environment variable or default to AI-service on port 8000
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
 
 interface DebateSession {
   session_id: string;
@@ -72,7 +72,7 @@ export class DebateAdvisorClient {
   // Debate Sessions
   async startDebate(symbol: string, rounds: number = 3): Promise<DebateSession> {
     try {
-      const response = await fetch(`${this.baseUrl}/v1/debate/start`, {
+      const response = await fetch(`${this.baseUrl}/debate/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticker: symbol, timeframe: '3 months', min_rounds: 1, max_rounds: rounds })
@@ -93,7 +93,7 @@ export class DebateAdvisorClient {
 
   async getSessionInfo(sessionId: string): Promise<SessionInfo> {
     try {
-      const response = await fetch(`${this.baseUrl}/v1/debate/status/${sessionId}`);
+      const response = await fetch(`${this.baseUrl}/debate/status/${sessionId}`);
       if (!response.ok) throw new Error('Failed to get session info');
       return response.json();
     } catch (error) {

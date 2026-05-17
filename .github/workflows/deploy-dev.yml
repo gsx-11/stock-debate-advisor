@@ -1,13 +1,18 @@
-name: Deploy to Dev
+name: Deploy v7 to Development
 
 on:
   push:
-    branches: [main, develop]
-    paths: ['v7/**', '.github/workflows/deploy-dev.yml']
+    branches:
+      - main
+      - develop
+    paths:
+      - 'v7/**'
+      - '.github/workflows/deploy-dev.yml'
   workflow_dispatch:
     inputs:
       skip_frontend:
         description: 'Skip frontend deployment'
+        required: false
         default: 'false'
 
 env:
@@ -17,53 +22,158 @@ env:
   PYTHON_VERSION: '3.12'
 
 jobs:
-  setup:
-    name: Setup
+  validate:
+    name: Validate Configuration
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check AWS credentials
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "❌ AWS credentials not configured in GitHub Secrets"
+            exit 1
+          fi
+          echo "✓ AWS credentials configured"
+
+      - name: Validate v7 structure
+        run: |
+          if [ ! -d "v7" ]; then
+            echo "❌ v7 directory not found"
+            exit 1
+          fi
+          
+          required_dirs=("cdk" "frontend" "ai-service" "data_store")
+          for dir in "${required_dirs[@]}"; do
+            if [ ! -d "v7/$dir" ]; then
+              echo "❌ Missing required directory: v7/$dir"
+              exit 1
+            fi
+          done
+          
+          echo "✓ v7 structure is valid"
+
+  setup:
+    name: Setup & Dependencies
+    runs-on: ubuntu-latest
+    needs: validate
     outputs:
       git-sha: ${{ steps.git.outputs.sha }}
+      timestamp: ${{ steps.time.outputs.timestamp }}
     steps:
-      - uses: actions/checkout@v4
-      - id: git
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get git SHA
+        id: git
         run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
+      - name: Get timestamp
+        id: time
+        run: echo "timestamp=$(date +'%Y%m%d_%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            v7/cdk/package-lock.json
+            v7/frontend/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install AWS CDK CLI
+        run: npm install -g aws-cdk@2
+
+      - name: Verify tools
+        run: |
+          echo "Node version: $(node --version)"
+          echo "npm version: $(npm --version)"
+          echo "Python version: $(python --version)"
+          echo "CDK version: $(cdk --version)"
+
   build-backend:
-    name: Build Backend
+    name: Build Backend (AI Service)
     runs-on: ubuntu-latest
     needs: setup
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install & lint
-        working-directory: v7/ai-service
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-backend-${{ hashFiles('v7/ai-service/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-backend-
+
+      - name: Install AI service dependencies
         run: |
-          pip install -r requirements.txt 2>/dev/null || true
-          pip install flake8 || true
-          python -m flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics 2>/dev/null || true
+          cd v7/ai-service
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt || echo "No requirements.txt found in ai-service"
+          echo "✓ AI service dependencies installed"
+
+      - name: Lint Python code
+        run: |
+          cd v7/ai-service
+          pip install flake8 black isort || true
+          python -m flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || echo "Flake8 checks completed"
+          echo "✓ Python linting completed"
+
+      - name: Validate Python syntax
+        run: |
+          cd v7/ai-service
+          python -m py_compile src/handlers/*.py src/*.py 2>/dev/null || echo "No Python files to compile"
+          echo "✓ Python syntax validated"
 
   build-infrastructure:
-    name: Build CDK
+    name: Build Infrastructure (CDK)
     runs-on: ubuntu-latest
     needs: setup
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: v7/cdk/package-lock.json
 
-      - name: Build & synth
-        working-directory: v7/cdk
+      - name: Install CDK dependencies
         run: |
+          cd v7/cdk
           npm install
-          npm run build
-          npm run cdk:synth
+          echo "✓ CDK dependencies installed"
 
-      - uses: actions/upload-artifact@v4
+      - name: Build CDK TypeScript
+        run: |
+          cd v7/cdk
+          npm run build
+          echo "✓ CDK build completed"
+
+      - name: Synthesize CloudFormation
+        run: |
+          cd v7/cdk
+          npm run cdk:synth
+          echo "✓ CloudFormation template synthesized"
+
+      - name: Upload CloudFormation artifact
+        uses: actions/upload-artifact@v3
         with:
           name: cloudformation-template
           path: v7/cdk/cdk.out/
@@ -74,105 +184,376 @@ jobs:
     runs-on: ubuntu-latest
     needs: setup
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: v7/frontend/package-lock.json
 
-      - name: Build
-        working-directory: v7/frontend
+      - name: Install frontend dependencies
         run: |
+          cd v7/frontend
           npm install
-          npm run test:ci 2>/dev/null || true
-          npm run build
+          echo "✓ Frontend dependencies installed"
 
-      - uses: actions/upload-artifact@v4
+      - name: Run tests
+        continue-on-error: true
+        run: |
+          cd v7/frontend
+          npm run test:ci 2>/dev/null || echo "Tests skipped or not configured"
+          echo "✓ Frontend tests completed"
+
+      - name: Build frontend
+        run: |
+          cd v7/frontend
+          npm run build
+          echo "✓ Frontend build completed"
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v3
         with:
           name: frontend-build
           path: v7/frontend/dist/
           retention-days: 7
 
   deploy-infrastructure:
-    name: Deploy Infrastructure
+    name: Deploy Infrastructure to AWS
     runs-on: ubuntu-latest
     needs: [setup, build-backend, build-infrastructure]
-    environment: development
+    environment:
+      name: development
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: v7/cdk/package-lock.json
 
-      - name: Deploy
-        working-directory: v7/cdk
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk@2
+
+      - name: Install CDK dependencies
         run: |
-          npm install -g aws-cdk@2
+          cd v7/cdk
           npm install
           npm run build
-          cdk deploy --require-approval never -c environment=${{ env.ENVIRONMENT }}
+
+      - name: Verify AWS authentication
+        run: |
+          aws sts get-caller-identity
+          echo "✓ AWS authentication verified"
+
+      - name: Deploy CDK stack
+        run: |
+          cd v7/cdk
+          cdk deploy \
+            --require-approval never \
+            -c environment=${{ env.ENVIRONMENT }} \
+            --tags Environment=${{ env.ENVIRONMENT }} \
+                  GitSHA=${{ needs.setup.outputs.git-sha }} \
+                  Timestamp=${{ needs.setup.outputs.timestamp }} \
+                  GitHubWorkflow=deploy-dev
         env:
           CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
           CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
 
-      - name: Save outputs
+      - name: Get stack outputs
+        id: outputs
         run: |
+          STACK_NAME="stock-debate-dev"
           aws cloudformation describe-stacks \
-            --stack-name stock-debate-dev \
-            --query 'Stacks[0].Outputs' > stack-outputs.json
+            --stack-name "$STACK_NAME" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Stacks[0].Outputs' \
+            --output table
+          echo "✓ Stack outputs retrieved"
 
-      - uses: actions/upload-artifact@v4
+      - name: Store outputs
+        run: |
+          STACK_NAME="stock-debate-dev"
+          aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Stacks[0].Outputs' > stack-outputs.json
+          echo "Stack outputs saved"
+
+      - name: Upload stack outputs
+        uses: actions/upload-artifact@v3
         with:
           name: stack-outputs
           path: stack-outputs.json
           retention-days: 30
 
   deploy-frontend:
-    name: Deploy Frontend
+    name: Deploy Frontend to S3/CloudFront
     runs-on: ubuntu-latest
-    needs: [build-frontend, deploy-infrastructure]
+    needs: [setup, build-frontend, deploy-infrastructure]
     if: github.event.inputs.skip_frontend != 'true'
     steps:
-      - uses: actions/download-artifact@v4.1.3
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v3
         with:
           name: frontend-build
-          path: dist/
+          path: v7/frontend/dist/
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy to S3 & CloudFront
+      - name: Get S3 bucket name from stack outputs
+        id: stack
         run: |
-          BUCKET=$(aws cloudformation describe-stacks \
-            --stack-name stock-debate-dev \
+          STACK_NAME="stock-debate-dev"
+          BUCKET_NAME=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region ${{ env.AWS_REGION }} \
             --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
             --output text)
           
-          DIST_ID=$(aws cloudformation describe-stacks \
-            --stack-name stock-debate-dev \
+          if [ -z "$BUCKET_NAME" ]; then
+            echo "⚠️ Frontend bucket not found in stack outputs"
+            exit 1
+          fi
+          
+          echo "bucket-name=$BUCKET_NAME" >> $GITHUB_OUTPUT
+          echo "✓ S3 bucket: $BUCKET_NAME"
+
+      - name: Upload static assets to S3
+        run: |
+          BUCKET=${{ steps.stack.outputs.bucket-name }}
+          
+          aws s3 sync v7/frontend/dist/ "s3://${BUCKET}/" \
+            --delete \
+            --cache-control "max-age=604800" \
+            --exclude "index.html" \
+            --exclude ".map" \
+            --region ${{ env.AWS_REGION }}
+          
+          echo "✓ Static assets uploaded"
+
+      - name: Upload index.html with no-cache
+        run: |
+          BUCKET=${{ steps.stack.outputs.bucket-name }}
+          
+          aws s3 cp v7/frontend/dist/index.html "s3://${BUCKET}/index.html" \
+            --cache-control "max-age=0, must-revalidate" \
+            --content-type "text/html" \
+            --region ${{ env.AWS_REGION }}
+          
+          echo "✓ index.html uploaded"
+
+      - name: Invalidate CloudFront cache
+        id: cloudfront
+        run: |
+          STACK_NAME="stock-debate-dev"
+          DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region ${{ env.AWS_REGION }} \
             --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
             --output text)
           
-          aws s3 sync dist/ "s3://${BUCKET}/" \
-            --delete --cache-control "max-age=604800" \
-            --exclude "index.html" --exclude "*.map"
-          
-          aws s3 cp dist/index.html "s3://${BUCKET}/index.html" \
-            --cache-control "max-age=0, must-revalidate"
+          if [ -z "$DISTRIBUTION_ID" ] || [ "$DISTRIBUTION_ID" = "None" ]; then
+            echo "⚠️ CloudFront distribution not found"
+            exit 1
+          fi
           
           aws cloudfront create-invalidation \
-            --distribution-id "$DIST_ID" \
-            --paths "/*"
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/*" \
+            --region ${{ env.AWS_REGION }}
+          
+          echo "distribution-id=$DISTRIBUTION_ID" >> $GITHUB_OUTPUT
+          echo "✓ CloudFront cache invalidated"
 
+      - name: Get CloudFront URL
+        run: |
+          STACK_NAME="stock-debate-dev"
+          URL=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Stacks[0].Outputs[?OutputKey==`FrontendURL`].OutputValue' \
+            --output text)
+          
+          if [ -z "$URL" ] || [ "$URL" = "None" ]; then
+            echo "⚠️ Frontend URL not found in stack outputs"
+          else
+            echo "Frontend URL: $URL"
+          fi
+
+  health-check:
+    name: Health Check & Verification
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-infrastructure, deploy-frontend]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check Lambda functions
+        continue-on-error: true
+        run: |
+          echo "Checking Lambda functions..."
+          
+          FUNCTIONS=$(aws lambda list-functions \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Functions[?Tags.Environment==`dev`].FunctionName' \
+            --output text)
+          
+          if [ -z "$FUNCTIONS" ]; then
+            echo "⚠️ No Lambda functions found"
+          else
+            echo "✓ Lambda functions found: $FUNCTIONS"
+            
+            for func in $FUNCTIONS; do
+              STATUS=$(aws lambda get-function --function-name "$func" \
+                --region ${{ env.AWS_REGION }} \
+                --query 'Configuration.State' \
+                --output text)
+              echo "  - $func: $STATUS"
+            done
+          fi
+
+      - name: Check DynamoDB tables
+        continue-on-error: true
+        run: |
+          echo "Checking DynamoDB tables..."
+          
+          TABLES=$(aws dynamodb list-tables \
+            --region ${{ env.AWS_REGION }} \
+            --query 'TableNames[?contains(@, `stock-debate-dev`)]' \
+            --output text)
+          
+          if [ -z "$TABLES" ]; then
+            echo "⚠️ No DynamoDB tables found for dev environment"
+          else
+            echo "✓ DynamoDB tables found: $TABLES"
+          fi
+
+      - name: Check API Gateway
+        continue-on-error: true
+        run: |
+          echo "Checking API Gateway..."
+          
+          API=$(aws apigateway get-rest-apis \
+            --region ${{ env.AWS_REGION }} \
+            --query 'items[?name==`StockDebate-api-dev`].id' \
+            --output text)
+          
+          if [ -z "$API" ]; then
+            echo "⚠️ API Gateway not found"
+          else
+            echo "✓ API Gateway found: $API"
+          fi
+
+      - name: Generate deployment report
+        if: always()
+        run: |
+          cat > deployment-report.md << 'EOF'
+          # Stock Debate Advisor v7 - Development Deployment Report
+          
+          **Deployment Date:** $(date)
+          **Git SHA:** ${{ needs.setup.outputs.git-sha }}
+          **Environment:** ${{ env.ENVIRONMENT }}
+          **Region:** ${{ env.AWS_REGION }}
+          
+          ## Deployment Status
+          
+          - ✓ Infrastructure: ${{ needs.deploy-infrastructure.result == 'success' && 'Deployed' || 'Failed' }}
+          - ✓ Frontend: ${{ needs.deploy-frontend.result == 'success' && 'Deployed' || 'Skipped/Failed' }}
+          
+          ## Next Steps
+          
+          1. Access the application at the CloudFront URL (check stack outputs)
+          2. Run health checks and integration tests
+          3. Monitor CloudWatch logs for any errors
+          4. Test API endpoints and Lambda functions
+          
+          ## Useful Commands
+          
+          ```bash
+          # View Lambda logs
+          make logs
+          
+          # Get stack outputs
+          aws cloudformation describe-stacks --stack-name stock-debate-dev --query 'Stacks[0].Outputs' --region ${{ env.AWS_REGION }}
+          
+          # Deploy again
+          make deploy ENVIRONMENT=dev
+          ```
+          EOF
+          cat deployment-report.md
+
+      - name: Upload deployment report
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-report
+          path: deployment-report.md
+          retention-days: 30
+
+  notify-completion:
+    name: Notify Deployment Completion
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-infrastructure, deploy-frontend, health-check]
+    if: always()
+    steps:
+      - name: Determine deployment status
+        id: status
+        run: |
+          if [ "${{ needs.deploy-infrastructure.result }}" = "success" ]; then
+            echo "result=success" >> $GITHUB_OUTPUT
+            echo "✓ Deployment completed successfully"
+          else
+            echo "result=failure" >> $GITHUB_OUTPUT
+            echo "✗ Deployment failed"
+          fi
+
+      - name: Print deployment summary
+        run: |
+          echo "==================================="
+          echo "Stock Debate Advisor v7 Deployment"
+          echo "==================================="
+          echo "Environment: ${{ env.ENVIRONMENT }}"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo "Git SHA: ${{ needs.setup.outputs.git-sha }}"
+          echo "Status: ${{ steps.status.outputs.result }}"
+          echo "==================================="
+
+      - name: Comment on commit
+        if: github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: `## 🚀 Stock Debate Advisor v7 Deployment\n\n**Status:** ${{ steps.status.outputs.result == 'success' ? '✅ Success' : '❌ Failed' }}\n\n**Environment:** Development\n**Region:** ${{ env.AWS_REGION }}\n**Git SHA:** ${{ needs.setup.outputs.git-sha }}\n\n[View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`
+            })

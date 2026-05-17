@@ -7,6 +7,7 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as autoscaling from 'aws-cdk-lib/aws-applicationautoscaling';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
@@ -41,7 +42,7 @@ export class EcsStack extends cdk.Stack {
     // Get or create VPC
     const vpc = props.vpc || new ec2.Vpc(this, 'DebateVpc', {
       maxAzs: 2,
-      cidrMask: 24
+      cidrBlock: '10.0.0.0/16'
     });
 
     // SQS Queue for debate tasks (15 min visibility timeout for debate processing)
@@ -110,7 +111,7 @@ export class EcsStack extends cdk.Stack {
     this.ecsTaskDefinition = new ecs.TaskDefinition(this, 'DebateTaskDefinition', {
       compatibility: ecs.Compatibility.FARGATE,
       cpu: '2048',      // 2 vCPU
-      memoryMiB: 8192,  // 8 GB
+      memoryMiB: '8192',  // 8 GB (as string for Fargate)
       executionRole: ecsTaskExecutionRole,
       taskRole: ecsTaskRole
     });
@@ -152,9 +153,7 @@ export class EcsStack extends cdk.Stack {
       taskDefinition: this.ecsTaskDefinition,
       desiredCount: 1,
       serviceName: 'stock-debate-service',
-      assignPublicIp: false,  // No public IP needed
-      // Auto-scaling policy
-      canContainersAccessInstanceRole: false
+      assignPublicIp: false  // No public IP needed
     });
 
     // Add auto-scaling based on queue depth
@@ -171,7 +170,7 @@ export class EcsStack extends cdk.Stack {
         { lower: 1, change: +2 },     // >1 messages: add 2 tasks
         { lower: 10, change: +4 }     // >10 messages: add 4 more tasks
       ],
-      adjustmentType: ecs.AdjustmentType.CHANGE_IN_CAPACITY
+      adjustmentType: autoscaling.AdjustmentType.CHANGE_IN_CAPACITY
     });
 
     cdk.Tags.of(this.ecsService).add('Component', 'ECS');

@@ -298,7 +298,7 @@ cdk deploy EcsStack
 
 ## Troubleshooting
 
-### Frontend shows "localhost:8001" API
+### Frontend shows "localhost:8000" API
 **Problem**: Frontend hardcoded to localhost
 **Solution**: Already fixed! Frontend now uses environment variable VITE_API_BASE_URL
 

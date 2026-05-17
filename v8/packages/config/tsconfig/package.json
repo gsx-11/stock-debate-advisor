@@ -1,9 +1,0 @@
-{
-  "name": "@stock-debate/tsconfig",
-  "version": "8.0.0",
-  "private": true,
-  "files": [
-    "base.json",
-    "react.json"
-  ]
-}

@@ -131,8 +131,8 @@ def handler(event, context):
           ]
         }
       }),
-      timeout: cdk.Duration.seconds(300), // 5 minutes for debate
-      memorySize: 512,
+      timeout: cdk.Duration.seconds(900), // 15 minutes for multi-round debates
+      memorySize: 1024,
       ephemeralStorageSize: cdk.Size.mebibytes(1024),
       role: lambdaRole,
       environment: {
@@ -143,11 +143,12 @@ def handler(event, context):
         BEDROCK_MODEL: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
         AWS_LAMBDA_LOG_LEVEL: 'INFO'
       },
-      description: 'Multi-agent stock debate orchestration using Bedrock Claude Sonnet 3.5'
+      description: 'Multi-agent stock debate v3.0 (5 agents, price conditions, Auto/Human mode)'
     });
     cdk.Tags.of(this.debateLambda).add('Component', 'AI-Service');
     cdk.Tags.of(this.debateLambda).add('Purpose', 'DebateOrchestration');
     cdk.Tags.of(this.debateLambda).add('Model', 'Claude-Sonnet-3.5');
+    cdk.Tags.of(this.debateLambda).add('Version', '3.0');
 
     // Health check Lambda
     const healthLambda = new lambda.Function(this, 'HealthLambda', {
@@ -158,7 +159,7 @@ def handler(event, context):
           image: lambda.Runtime.PYTHON_3_12.bundlingImage,
           command: [
             'bash', '-c',
-            'pip install -r deps/requirements-health.txt -t /asset-output && cp -r src /asset-output/'
+            'pip install -r deps/requirements-prod.txt -t /asset-output && cp -r src /asset-output/'
           ]
         }
       }),
@@ -200,30 +201,47 @@ def handler(event, context):
       methodResponses: [{ statusCode: '200' }]
     });
 
-    // Debate endpoint: POST /debate
+    // Legacy debate endpoint: POST /debate
     const debateResource = this.debateApi.root.addResource('debate');
-    const debateIntegration = new apigateway.LambdaIntegration(this.debateLambda, {
-      proxy: false,
-      integrationResponses: [
-        {
-          statusCode: '200',
-          responseTemplates: { 'application/json': '$input.json("$")' }
-        },
-        {
-          statusCode: '400',
-          selectionPattern: '.*"error".*',
-          responseTemplates: { 'application/json': '$input.json("$")' }
-        }
-      ]
-    });
+    const debateLambdaProxy = new apigateway.LambdaIntegration(this.debateLambda);
+    debateResource.addMethod('POST', debateLambdaProxy);
 
-    debateResource.addMethod('POST', debateIntegration, {
-      methodResponses: [
-        { statusCode: '200' },
-        { statusCode: '400' },
-        { statusCode: '500' }
-      ]
-    });
+    // ── v3.0 API Routes ──────────────────────────────────────────
+    const apiResource = this.debateApi.root.addResource('api');
+    const v1Resource = apiResource.addResource('v1');
+
+    // POST /api/v1/debate/start
+    const v1DebateResource = v1Resource.addResource('debate');
+    const v1StartResource = v1DebateResource.addResource('start');
+    v1StartResource.addMethod('POST', debateLambdaProxy);
+
+    // POST /api/v1/debate/continue
+    const v1ContinueResource = v1DebateResource.addResource('continue');
+    v1ContinueResource.addMethod('POST', debateLambdaProxy);
+
+    // GET /api/v1/debate/status/{session_id}
+    const v1StatusResource = v1DebateResource.addResource('status');
+    const v1StatusIdResource = v1StatusResource.addResource('{session_id}');
+    v1StatusIdResource.addMethod('GET', debateLambdaProxy);
+
+    // GET /api/v1/debate/result/{session_id}
+    const v1ResultResource = v1DebateResource.addResource('result');
+    const v1ResultIdResource = v1ResultResource.addResource('{session_id}');
+    v1ResultIdResource.addMethod('GET', debateLambdaProxy);
+
+    // GET /api/v1/companies
+    const v1CompaniesResource = v1Resource.addResource('companies');
+    v1CompaniesResource.addMethod('GET', debateLambdaProxy);
+
+    // GET /api/v1/company/{symbol}
+    const v1CompanyResource = v1Resource.addResource('company');
+    const v1CompanySymbolResource = v1CompanyResource.addResource('{symbol}');
+    v1CompanySymbolResource.addMethod('GET', debateLambdaProxy);
+
+    // POST /api/v2/query (LangGraph)
+    const v2Resource = apiResource.addResource('v2');
+    const v2QueryResource = v2Resource.addResource('query');
+    v2QueryResource.addMethod('POST', debateLambdaProxy);
 
     // API Gateway outputs
     new cdk.CfnOutput(this, 'ApiEndpoint', {

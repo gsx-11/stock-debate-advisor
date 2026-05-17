@@ -17,8 +17,8 @@ echo ""
 
 # Check 1: debate-api.ts base URL
 echo "1. Checking debate-api.ts base URL..."
-if grep -q "http://localhost:8001/api'" /home/x1e3/work/vmo/agentic/stock-debate-advisor/v7/frontend/src/api/debate-api.ts; then
-  echo -e "${GREEN}✓${NC} Base URL is correct (http://localhost:8001/api)"
+if grep -q "http://localhost:8000/api'" /home/x1e3/work/vmo/agentic/stock-debate-advisor/v7/frontend/src/api/debate-api.ts; then
+  echo -e "${GREEN}✓${NC} Base URL is correct (http://localhost:8000/api)"
 else
   echo -e "${RED}✗${NC} Base URL fix not applied"
 fi
@@ -41,7 +41,7 @@ fi
 
 # Check 4: DebateAdvisorClient.ts base URL
 echo "4. Checking DebateAdvisorClient.ts base URL..."
-if grep -q "http://localhost:8001/api'" /home/x1e3/work/vmo/agentic/stock-debate-advisor/v7/frontend/src/api/DebateAdvisorClient.ts; then
+if grep -q "http://localhost:8000/api'" /home/x1e3/work/vmo/agentic/stock-debate-advisor/v7/frontend/src/api/DebateAdvisorClient.ts; then
   echo -e "${GREEN}✓${NC} DebateAdvisorClient base URL is correct"
 else
   echo -e "${RED}✗${NC} DebateAdvisorClient base URL not fixed"
@@ -49,7 +49,7 @@ fi
 
 # Check 5: client.ts base URL
 echo "5. Checking client.ts base URL..."
-if grep -q "http://localhost:8001/api'" /home/x1e3/work/vmo/agentic/stock-debate-advisor/v7/frontend/src/api/client.ts; then
+if grep -q "http://localhost:8000/api'" /home/x1e3/work/vmo/agentic/stock-debate-advisor/v7/frontend/src/api/client.ts; then
   echo -e "${GREEN}✓${NC} client.ts base URL is correct"
 else
   echo -e "${RED}✗${NC} client.ts base URL not fixed"
@@ -59,7 +59,7 @@ fi
 echo "6. Checking frontend .env file..."
 if [ -f /home/x1e3/work/vmo/agentic/stock-debate-advisor/v7/frontend/.env ]; then
   echo -e "${GREEN}✓${NC} .env file created"
-  if grep -q "VITE_API_BASE_URL=http://localhost:8001/api" /home/x1e3/work/vmo/agentic/stock-debate-advisor/v7/frontend/.env; then
+  if grep -q "VITE_API_BASE_URL=http://localhost:8000/api" /home/x1e3/work/vmo/agentic/stock-debate-advisor/v7/frontend/.env; then
     echo -e "${GREEN}✓${NC} .env has correct VITE_API_BASE_URL"
   fi
 else
@@ -79,9 +79,9 @@ echo "=== Summary ==="
 echo -e "${GREEN}All API endpoint fixes have been applied!${NC}"
 echo ""
 echo "To test the endpoint:"
-echo "1. Ensure backend is running: python -m uvicorn src.handlers.main:app --host 0.0.0.0 --port 8001"
+echo "1. Ensure backend is running: python -m uvicorn src.handlers.main:app --host 0.0.0.0 --port 8000"
 echo "2. Test with curl:"
-echo "   curl -X POST http://localhost:8001/api/v1/debate/start \\"
+echo "   curl -X POST http://localhost:8000/api/v1/debate/start \\"
 echo "     -H 'Content-Type: application/json' \\"
 echo "     -d '{\"ticker\":\"AAPL\",\"timeframe\":\"3 months\",\"min_rounds\":1,\"max_rounds\":3}'"
 echo "3. Start frontend: npm run dev"
