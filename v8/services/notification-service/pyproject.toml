@@ -1,0 +1,36 @@
+[tool.poetry]
+name = "notification-service"
+version = "1.0.0"
+description = "Beacon transmission system for real-time alerts"
+authors = ["Stock Debate Team"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.110.0"
+uvicorn = {extras = ["standard"], version = "^0.27.0"}
+sqlalchemy = "^2.0.25"
+alembic = "^1.13.0"
+fastcrud = "^0.12.0"
+pydantic = "^2.6.0"
+pydantic-settings = "^2.1.0"
+asyncpg = "^0.29.0"
+python-multipart = "^0.0.22"
+websockets = "^12.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+pytest-asyncio = "^0.23.4"
+pytest-cov = "^4.1.0"
+httpx = "^0.26.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
